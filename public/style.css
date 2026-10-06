@@ -5,3 +5,6 @@
 .checkout-banner{aspect-ratio:4/1}.checkout-banner img{height:100%;object-fit:cover}
 
 .instruction-icon svg{display:block;width:22px;height:22px}
+
+/* Avoid automatic focus zoom on mobile without disabling pinch zoom. */
+@media(max-width:767px){.field input,.pix-screen textarea{font-size:16px}}

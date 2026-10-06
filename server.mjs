@@ -1,23 +1,26 @@
 import http from 'node:http';
-import { readFile, mkdir, writeFile, readdir, stat, unlink } from 'node:fs/promises';
+import { readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { buildSale, signToken, readToken, blackcat, CheckoutError } from './lib/checkout.mjs';
 import { allowedOrigins, isAllowedOrigin } from './lib/origin.mjs';
+import { createPaymentStore } from './lib/payment-store.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
-const dataDir = resolve(process.env.DATA_DIR || resolve(root, 'data'));
+const dataDir = process.env.VERCEL ? resolve(tmpdir(), 'combo-checkout') : resolve(process.env.DATA_DIR || resolve(root, 'data'));
 const apiKey = process.env.BLACKCAT_API_KEY;
 const secret = process.env.CHECKOUT_SECRET;
 const port = Number(process.env.PORT || 3000);
 const origins = allowedOrigins();
+const paymentStore = createPaymentStore({ directory: dataDir });
 const staticFiles = { '/': ['index.html','text/html; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/favicon.svg': ['favicon.svg','image/svg+xml'], '/product-reference.png': ['product-reference.png','image/png'] };
 const rateLimits = new Map();
 staticFiles['/banner-pix.png'] = ['banner-pix.png','image/png'];
 const cleanup = setInterval(async () => {
   for (const [key, value] of rateLimits) if (value.reset < Date.now()) rateLimits.delete(key);
-  try { for (const name of await readdir(dataDir)) if (/^[a-f\d]{64}\.json$/.test(name) && (await stat(resolve(dataDir,name))).mtimeMs < Date.now() - 3 * 86400000) await unlink(resolve(dataDir,name)); } catch { /* Directory may not exist before the first payment. */ }
+    try { for (const name of await readdir(dataDir)) if (/^[a-f\d]{64}\.json$/.test(name) && (await stat(resolve(dataDir,name))).mtimeMs < Date.now() - 3 * 86400000) await unlink(resolve(dataDir,name)); } catch { /* Directory may not exist before the first payment. */ }
 }, 60000);
 cleanup.unref();
 
@@ -31,6 +34,7 @@ async function parseBody(req) {
 }
 
 const server = http.createServer(async (req, res) => {
+  let stage = 'request';
   res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('Referrer-Policy','same-origin');
   res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
@@ -55,22 +59,20 @@ const server = http.createServer(async (req, res) => {
       const sale = buildSale(input);
       sale.externalRef = input.requestId;
       const hash = createHash('sha256').update(JSON.stringify(sale)).digest('hex');
-      const filename = resolve(dataDir, `${createHash('sha256').update(input.requestId).digest('hex')}.json`);
-      await mkdir(dataDir, { recursive: true });
-      try { await writeFile(filename, JSON.stringify({ hash, pending: true }), { flag: 'wx', mode: 0o600 }); }
-      catch (err) {
-        if (err.code !== 'EEXIST') throw err;
-        let previous;
-        try { previous = JSON.parse(await readFile(filename,'utf8')); } catch { throw new CheckoutError('Pagamento em processamento. Aguarde antes de tentar novamente.',409); }
+      stage = 'reserve-order';
+      const previous = await paymentStore.reserve(input.requestId, hash);
+      if (previous) {
         if (previous.hash !== hash) throw new CheckoutError('Essa tentativa já está vinculada a outro pedido.',409);
         if (previous.result) return send(res,200,previous.result);
         throw new CheckoutError('Sua solicitação está em análise. Para evitar uma cobrança duplicada, confirme a situação com o vendedor antes de iniciar outra compra.',409);
       }
       // A failed or ambiguous request remains reserved; the gateway does not document idempotency.
+      stage = 'create-pix';
       const data = await blackcat('/sales/create-sale',apiKey,sale);
       if (!data.transactionId || !data.paymentData?.copyPaste && !data.paymentData?.qrCode) throw new CheckoutError('O banco não retornou os dados do Pix. Confirme a situação com o vendedor antes de tentar outra compra.',502);
       const result = { token: signToken(data.transactionId,secret), amount: sale.amount, status: data.status, paymentData: { copyPaste: data.paymentData.copyPaste || data.paymentData.qrCode, qrCodeBase64: data.paymentData.qrCodeBase64 || null, expiresAt: data.paymentData.expiresAt || null } };
-      await writeFile(filename,JSON.stringify({ hash, result }), { mode: 0o600 });
+      stage = 'save-order';
+      await paymentStore.save(input.requestId, hash, result);
       return send(res,201,result);
     }
     if (url.pathname === '/api/status' && req.method === 'GET') {
@@ -83,9 +85,9 @@ const server = http.createServer(async (req, res) => {
   } catch (err) {
     // Never log customer information, API keys, or gateway response bodies.
     const status = err instanceof CheckoutError ? err.status : 500;
-    if (status >= 500) console.error(`Checkout request failed (${status}, ${err.name}).`);
-    send(res,status,{ error: err instanceof CheckoutError ? err.message : 'Não foi possível concluir a solicitação. Verifique sua conexão e tente novamente.' });
+    if (status >= 500) console.error(JSON.stringify({ event: 'checkout-error', status, stage, type: err.name, code: /^[A-Z_0-9]+$/.test(err.code || '') ? err.code : undefined }));
+    send(res,status,{ error: err instanceof CheckoutError ? err.message : 'O serviço de pagamento encontrou um erro interno. Aguarde e tente novamente; se persistir, entre em contato com o vendedor.' });
   }
 });
-server.requestTimeout = 35000;
+server.requestTimeout = 55000;
 server.listen(port, () => console.log(`Checkout: http://localhost:${port}${apiKey && secret ? '' : ' (configure as credenciais para habilitar Pix)'}`));

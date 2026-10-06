@@ -27,13 +27,15 @@ form.addEventListener('submit', async event => {
     const body = { ...Object.fromEntries(new FormData(form)), offers: selected(), requestId };
     const params = new URLSearchParams(location.search);
     for (const key of ['utm_source','utm_medium','utm_campaign','utm_content','utm_term']) if (params.has(key)) body[key] = params.get(key);
-    const response = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(32000) });
-    const data = await response.json();
+    const response = await fetch('/api/checkout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(55000) });
+    let data;
+    try { data = await response.json(); }
+    catch { throw new Error('O serviço de pagamento está temporariamente indisponível. Aguarde e tente novamente.'); }
     if (!response.ok) throw new Error(data.error || 'Não foi possível gerar o Pix.');
     payment = data;
     try { sessionStorage.setItem('checkout-payment',JSON.stringify(data)); } catch { /* Payment remains usable without browser storage. */ }
     renderPayment();
-  } catch (err) { showError(err.name === 'TimeoutError' || err instanceof TypeError ? 'Não foi possível confirmar a resposta. Aguarde e tente novamente; sua tentativa será preservada para evitar duplicidade.' : err.message); }
+  } catch (err) { showError(err.name === 'TimeoutError' || err instanceof TypeError ? 'Não foi possível confirmar a resposta. Antes de tentar novamente, confira com o vendedor se o Pix foi gerado.' : err.message); }
   finally { buy.disabled = false; buy.innerHTML = 'COMPRAR AGORA <span aria-hidden="true">✓</span>'; }
 });
 function renderPayment() {
@@ -78,3 +80,4 @@ document.querySelector('#copy').addEventListener('click',async () => {
 });
 document.querySelector('#new-order').addEventListener('click',() => { try { sessionStorage.removeItem('checkout-payment'); sessionStorage.removeItem('checkout-request'); } catch {} location.reload(); });
 try { const saved = JSON.parse(sessionStorage.getItem('checkout-payment')); if (saved?.token && saved?.paymentData?.copyPaste) { payment = saved; renderPayment(); } } catch { /* No saved payment. */ }
+
