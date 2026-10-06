@@ -3,3 +3,5 @@
 .checkout-banner{max-width:1200px;margin:0 auto 24px;overflow:hidden;border-radius:8px}.checkout-banner img{display:block;width:100%;height:auto}@media(max-width:600px){.checkout-banner{margin-bottom:14px;border-radius:4px}}
 
 .checkout-banner{aspect-ratio:4/1}.checkout-banner img{height:100%;object-fit:cover}
+
+.instruction-icon svg{display:block;width:22px;height:22px}
