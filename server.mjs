@@ -4,13 +4,14 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { buildSale, signToken, readToken, blackcat, CheckoutError } from './lib/checkout.mjs';
+import { allowedOrigins, isAllowedOrigin } from './lib/origin.mjs';
 
 const root = dirname(fileURLToPath(import.meta.url));
 const dataDir = resolve(process.env.DATA_DIR || resolve(root, 'data'));
 const apiKey = process.env.BLACKCAT_API_KEY;
 const secret = process.env.CHECKOUT_SECRET;
 const port = Number(process.env.PORT || 3000);
-const origin = process.env.APP_ORIGIN || `http://localhost:${port}`;
+const origins = allowedOrigins();
 const staticFiles = { '/': ['index.html','text/html; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/favicon.svg': ['favicon.svg','image/svg+xml'], '/product-reference.png': ['product-reference.png','image/png'] };
 const rateLimits = new Map();
 staticFiles['/banner-pix.png'] = ['banner-pix.png','image/png'];
@@ -42,7 +43,7 @@ const server = http.createServer(async (req, res) => {
     }
     if (url.pathname === '/api/checkout' && req.method === 'POST') {
       configured();
-      if (req.headers.origin !== origin) throw new CheckoutError('Origem de solicitação inválida.',403);
+      if (!isAllowedOrigin(req.headers.origin, origins)) throw new CheckoutError('Origem de solicitação inválida. O endereço deste checkout precisa estar autorizado na configuração do site.',403);
       const ip = req.socket.remoteAddress;
       const rate = rateLimits.get(ip) || { count: 0, reset: Date.now() + 60000 };
       if (rate.reset < Date.now()) { rate.count = 0; rate.reset = Date.now() + 60000; }
