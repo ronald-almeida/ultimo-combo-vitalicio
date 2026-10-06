@@ -13,6 +13,7 @@ const port = Number(process.env.PORT || 3000);
 const origin = process.env.APP_ORIGIN || `http://localhost:${port}`;
 const staticFiles = { '/': ['index.html','text/html; charset=utf-8'], '/style.css': ['style.css','text/css; charset=utf-8'], '/app.js': ['app.js','text/javascript; charset=utf-8'], '/favicon.svg': ['favicon.svg','image/svg+xml'], '/product-reference.png': ['product-reference.png','image/png'] };
 const rateLimits = new Map();
+staticFiles['/banner-pix.png'] = ['banner-pix.png','image/png'];
 const cleanup = setInterval(async () => {
   for (const [key, value] of rateLimits) if (value.reset < Date.now()) rateLimits.delete(key);
   try { for (const name of await readdir(dataDir)) if (/^[a-f\d]{64}\.json$/.test(name) && (await stat(resolve(dataDir,name))).mtimeMs < Date.now() - 3 * 86400000) await unlink(resolve(dataDir,name)); } catch { /* Directory may not exist before the first payment. */ }
